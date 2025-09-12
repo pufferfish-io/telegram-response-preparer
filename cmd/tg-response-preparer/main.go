@@ -2,43 +2,59 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	cfg "tg-response-preparer/internal/config"
-	cfgModel "tg-response-preparer/internal/config/model"
+
+	"tg-response-preparer/internal/config"
+	"tg-response-preparer/internal/logger"
 	"tg-response-preparer/internal/messaging"
 	"tg-response-preparer/internal/processor"
-	"tg-response-preparer/internal/service"
 )
 
 func main() {
-	log.Println("🚀 Starting tg-response-preparer...")
+	lg, cleanup := logger.NewZapLogger()
+	defer cleanup()
+
+	lg.Info("🚀 Starting tg-response-preparer…")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	kafkaConf, err := cfg.LoadSection[cfgModel.KafkaConfig]()
+	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("❌ Failed to load Kafka config: %v", err)
+		lg.Error("❌ Failed to load config: %v", err)
+		os.Exit(1)
 	}
 
+	producer, err := messaging.NewKafkaProducer(messaging.Option{
+		Logger:       lg,
+		Broker:       cfg.Kafka.BootstrapServersValue,
+		SaslUsername: cfg.Kafka.SaslUsername,
+		SaslPassword: cfg.Kafka.SaslPassword,
+		ClientID:     cfg.Kafka.ClientID,
+	})
 	if err != nil {
-		log.Fatalf("❌ Failed to create S3 uploader: %v", err)
+		lg.Error("❌ Failed to create producer: %v", err)
+		os.Exit(1)
 	}
+	defer producer.Close()
 
-	convertor := service.NewMessageConvertor()
-	tgMessagePreparer := processor.NewTgMessagePreparer(kafkaConf.TelegramMessageTopicName, convertor)
-	handler := func(msg []byte) error {
-		return tgMessagePreparer.Handle(ctx, msg)
-	}
+	tgMessagePreparer := processor.NewTgMessagePreparer(cfg.Kafka.TelegramMessageTopicName, producer)
 
-	messaging.Init(kafkaConf.BootstrapServersValue)
-
-	consumer, err := messaging.NewConsumer(kafkaConf.BootstrapServersValue, kafkaConf.ResponseMessageGroupId, kafkaConf.ResponseMessageTopicName, handler)
+	consumer, err := messaging.NewKafkaConsumer(messaging.ConsumerOption{
+		Logger:       lg,
+		Broker:       cfg.Kafka.BootstrapServersValue,
+		GroupID:      cfg.Kafka.ResponseMessageGroupID,
+		Topics:       []string{cfg.Kafka.ResponseMessageTopicName},
+		Handler:      tgMessagePreparer,
+		SaslUsername: cfg.Kafka.SaslUsername,
+		SaslPassword: cfg.Kafka.SaslPassword,
+		ClientID:     cfg.Kafka.ClientID,
+	})
 	if err != nil {
-		log.Fatalf("❌ Failed to create consumer: %v", err)
+		lg.Error("❌ Failed to create consumer: %v", err)
+		os.Exit(1)
 	}
 
 	go func() {
@@ -49,6 +65,7 @@ func main() {
 	}()
 
 	if err := consumer.Start(ctx); err != nil {
-		log.Fatalf("❌ Consumer error: %v", err)
+		lg.Error("❌ Consumer error: %v", err)
+		os.Exit(1)
 	}
 }
