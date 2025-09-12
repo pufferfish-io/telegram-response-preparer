@@ -4,35 +4,40 @@ import (
 	"context"
 	"encoding/json"
 
-	"tg-response-preparer/internal/messaging"
-	"tg-response-preparer/internal/model"
-	"tg-response-preparer/internal/service"
+	"tg-response-preparer/internal/contract"
 )
 
+type Producer interface {
+	Send(_ context.Context, topic string, data []byte) error
+}
+
 type TgMessagePreparer struct {
-	convertor  *service.MessageConvertor
+	producer   Producer
 	kafkaTopic string
 }
 
-func NewTgMessagePreparer(kafkaTopic string, convertor *service.MessageConvertor) *TgMessagePreparer {
+func NewTgMessagePreparer(kt string, p Producer) *TgMessagePreparer {
 	return &TgMessagePreparer{
-		convertor:  convertor,
-		kafkaTopic: kafkaTopic,
+		producer:   p,
+		kafkaTopic: kt,
 	}
 }
 
 func (t *TgMessagePreparer) Handle(ctx context.Context, raw []byte) error {
-	var requestMessage model.NormalizedResponse
+	var requestMessage contract.NormalizedResponse
 	if err := json.Unmarshal(raw, &requestMessage); err != nil {
 		return err
 	}
 
-	var msg = t.convertor.RequestToTelegramMessage(requestMessage)
+	msg := contract.SendMessageRequest{
+		ChatID: requestMessage.ChatID,
+		Text:   requestMessage.Text,
+	}
 
 	out, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 
-	return messaging.Send(t.kafkaTopic, out)
+	return t.producer.Send(ctx, t.kafkaTopic, out)
 }
