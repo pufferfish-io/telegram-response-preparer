@@ -9,21 +9,16 @@ import (
 
 type Kafka struct {
 	BootstrapServersValue    string `validate:"required" env:"BOOTSTRAP_SERVERS_VALUE"`
-	TelegramMessageTopicName string `validate:"required" env:"TELEGRAM_MESSAGE_TOPIC_NAME"`
-	ResponseMessageTopicName string `validate:"required" env:"RESPONSE_MESSAGE_TOPIC_NAME"`
-	ResponseMessageGroupID   string `validate:"required" env:"RESPONSE_MESSAGE_GROUP_ID"`
+	TelegramMessageTopicName string `validate:"required" env:"TOPIC_NAME_TG_REQUEST_MESSAGE"`
+	ResponseMessageTopicName string `validate:"required" env:"TOPIC_NAME_TG_RESPONSE_PREPARER"`
+	ResponseMessageGroupID   string `validate:"required" env:"GROUP_ID_TG_RESPONSE_PREPARER"`
 	SaslUsername             string `env:"SASL_USERNAME"`
 	SaslPassword             string `env:"SASL_PASSWORD"`
-	ClientID                 string `env:"CLIENT_ID"`
-}
-
-type Server struct {
-	Port int `validate:"required" env:"PORT"`
+	ClientID                 string `env:"CLIENT_ID_TG_RESPONSE_PREPARER"`
 }
 
 type Config struct {
-	Kafka  Kafka  `envPrefix:"TGRP_KAFKA_"`
-	Server Server `envPrefix:"TGRP_SERVER_"`
+	Kafka Kafka `envPrefix:"KAFKA_"`
 }
 
 func Load() (*Config, error) {
