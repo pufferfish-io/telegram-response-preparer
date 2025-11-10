@@ -1,63 +1,45 @@
 # telegram-response-preparer
 
-## Command Guide
+## Что делает
 
-### Run with exported .env (one‑liner)
+1. Подписывается на Kafka-топик `TOPIC_NAME_TG_RESPONSE_PREPARER` как консьюмер, используя параметры группы `GROUP_ID_TG_RESPONSE_PREPARER`.
+2. Десериализует полученное сообщение в `contract.NormalizedResponse`, извлекает `chat_id` и `text`.
+3. Собирает `contract.SendMessageRequest` и отправляет JSON в топик `TOPIC_NAME_TG_REQUEST_MESSAGE`, откуда уже читают Telegram-боты.
+4. Все ошибки логируются через `internal/logger`, паники безопасно отлавливаются, а сервис завершает работу с кодом 1 при критических сбоях.
 
-Exports all variables from `.env` into the current shell and runs the service.
+## Запуск
 
-```
-export $(cat .env | xargs) && go run ./cmd/tg-response-preparer
-```
+1. Задайте переменные окружения — можно положить их в `.env`.
+   ```bash
+   set -a && source .env && set +a && go run ./cmd/tg-response-preparer
+   ```
+2. Или просто экспортируйте значения и запустите:
+   ```bash
+   export KAFKA_BOOTSTRAP_SERVERS_VALUE=…
+   export …
+   go run ./cmd/tg-response-preparer
+   ```
+3. Для сборки/развертывания используйте Docker:
+   ```bash
+   docker build -t telegram-response-preparer .
+   docker run --rm -e KAFKA_BOOTSTRAP_SERVERS_VALUE=… \
+     -e … telegram-response-preparer
+   ```
 
-### Run with `source` (safer for complex values)
+## Переменные окружения
 
-Loads `.env` preserving quotes and special characters, then runs the service.
+Все перечисленные переменные обязательны, кроме `KAFKA_SASL_*`, если Kafka не требует аутентификации.
 
-```
-set -a && source .env && set +a && go run ./cmd/tg-response-preparer
-```
+- `KAFKA_BOOTSTRAP_SERVERS_VALUE` — список брокеров (`host:port[,host:port]`), к которым подключается продьюсер и консьюмер.
+- `KAFKA_TOPIC_NAME_TG_REQUEST_MESSAGE` — имя топика, куда отправляются `SendMessageRequest` (вход для Telegram-ботов).
+- `KAFKA_TOPIC_NAME_TG_RESPONSE_PREPARER` — топик, из которого читается `NormalizedResponse`.
+- `KAFKA_GROUP_ID_TG_RESPONSE_PREPARER` — `consumer group id` для безопасного масштабирования.
+- `KAFKA_CLIENT_ID_TG_RESPONSE_PREPARER` — идентификатор клиента Kafka (используется и продьюсером, и консьюмером).
+- `KAFKA_SASL_USERNAME` и `KAFKA_SASL_PASSWORD` — для SASL/SCRAM (могут оставаться пустыми, если авторизация не нужна).
 
-### Fetch/clean module deps
+## Примечания
 
-Resolves dependencies and prunes unused ones.
-
-```
-go mod tidy
-```
-
-### Verbose build (diagnostics)
-
-Builds the binary with verbose and command tracing. Removes old binary after build to keep the tree clean.
-
-```
-go build -v -x ./cmd/tg-response-preparer && rm -f tg-response-preparer
-```
-
-### Docker build (Buildx)
-
-Builds the image with detailed progress logs and without cache.
-
-```
-docker buildx build --no-cache --progress=plain .
-```
-
-### Create and push tag
-
-Cuts a release tag and pushes it to remote.
-
-```
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-### Manage tags
-
-List all tags, delete a tag locally and remotely, verify deletion.
-
-```
-git tag -l
-git tag -d vX.Y.Z
-git push --delete origin vX.Y.Z
-git ls-remote --tags origin | grep 'refs/tags/vX.Y.Z$'
-```
+- `contract.NormalizedResponse` обязан содержать `chat_id`, `text` и `source`, иначе сообщение не будет переотправлено.
+- Протокол обработки прост: текст перенаправляется напрямую, никакой дополнительной фильтрации/обогащения не происходит.
+- `internal/messaging` гарантирует идемпотентную отправку и логирует доставку для отладки.
+- Чтобы изменить поведение, расширьте `processor.TgMessagePreparer` — `Handle` просто маршалит и посылает JSON.
