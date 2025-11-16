@@ -1,45 +1,36 @@
-# telegram-response-preparer
+```mermaid
+flowchart LR
+  RESP["Kafka: tg_response_preparer"] --> PREP["telegram-response-preparer"]
+  PREP -->|chat_id + text| OUTQ["Kafka: tg_request_message"]
+  OUTQ --> SENDER["telegram-sender"]
+```
 
-## Что делает
+## О приложении
 
-1. Подписывается на Kafka-топик `TOPIC_NAME_TG_RESPONSE_PREPARER` как консьюмер, используя параметры группы `GROUP_ID_TG_RESPONSE_PREPARER`.
-2. Десериализует полученное сообщение в `contract.NormalizedResponse`, извлекает `chat_id` и `text`.
-3. Собирает `contract.SendMessageRequest` и отправляет JSON в топик `TOPIC_NAME_TG_REQUEST_MESSAGE`, откуда уже читают Telegram-боты.
-4. Все ошибки логируются через `internal/logger`, паники безопасно отлавливаются, а сервис завершает работу с кодом 1 при критических сбоях.
+telegram-response-preparer конвертирует `NormalizedResponse` из Kafka в минимальный `SendMessageRequest`, понятный Telegram‑отправителю. Сервис не знает о Telegram API — он лишь перекладывает поля и публикует JSON в отдельный топик.
 
-## Запуск
+## Роль приложения в архитектуре проекта
 
-1. Задайте переменные окружения — можно положить их в `.env`.
+Он связывает общий конвейер с конкретным отправителем:
+
+```mermaid
+flowchart LR
+    telegram-forwarder --> telegram-normalizer --> message-responder --> message-responder-ocr --> doc2text --> telegram-response-preparer --> telegram-sender
+```
+message-responder(-ocr) пишет ответы в суффиксный топик, а preparer превращает их в лёгкий формат (`chat_id`, `text`) и передаёт в `telegram-sender`, который уже вызывает Bot API.
+
+## Локальный запуск
+
+1. Убедитесь, что Go ≥ 1.24 установлен и есть доступ к Kafka‑кластеру. telegram-sender должен быть подписан на тот же выходной топик, чтобы увидеть сообщения.
+2. Экспортируйте переменные `KAFKA_*`:
+   - `KAFKA_BOOTSTRAP_SERVERS_VALUE` — брокеры.
+   - `KAFKA_TOPIC_NAME_TG_RESPONSE_PREPARER` — топик, куда upstream записывает `NormalizedResponse`.
+   - `KAFKA_GROUP_ID_TG_RESPONSE_PREPARER` — consumer group для этого сервиса.
+   - `KAFKA_TOPIC_NAME_TG_REQUEST_MESSAGE` — выходной топик для telegram-sender.
+   - `KAFKA_CLIENT_ID_TG_RESPONSE_PREPARER`, опционально `KAFKA_SASL_USERNAME`/`KAFKA_SASL_PASSWORD`.
+3. Запустите приложение:
    ```bash
-   set -a && source .env && set +a && go run ./cmd/tg-response-preparer
-   ```
-2. Или просто экспортируйте значения и запустите:
-   ```bash
-   export KAFKA_BOOTSTRAP_SERVERS_VALUE=…
-   export …
    go run ./cmd/tg-response-preparer
    ```
-3. Для сборки/развертывания используйте Docker:
-   ```bash
-   docker build -t telegram-response-preparer .
-   docker run --rm -e KAFKA_BOOTSTRAP_SERVERS_VALUE=… \
-     -e … telegram-response-preparer
-   ```
-
-## Переменные окружения
-
-Все перечисленные переменные обязательны, кроме `KAFKA_SASL_*`, если Kafka не требует аутентификации.
-
-- `KAFKA_BOOTSTRAP_SERVERS_VALUE` — список брокеров (`host:port[,host:port]`), к которым подключается продьюсер и консьюмер.
-- `KAFKA_TOPIC_NAME_TG_REQUEST_MESSAGE` — имя топика, куда отправляются `SendMessageRequest` (вход для Telegram-ботов).
-- `KAFKA_TOPIC_NAME_TG_RESPONSE_PREPARER` — топик, из которого читается `NormalizedResponse`.
-- `KAFKA_GROUP_ID_TG_RESPONSE_PREPARER` — `consumer group id` для безопасного масштабирования.
-- `KAFKA_CLIENT_ID_TG_RESPONSE_PREPARER` — идентификатор клиента Kafka (используется и продьюсером, и консьюмером).
-- `KAFKA_SASL_USERNAME` и `KAFKA_SASL_PASSWORD` — для SASL/SCRAM (могут оставаться пустыми, если авторизация не нужна).
-
-## Примечания
-
-- `contract.NormalizedResponse` обязан содержать `chat_id`, `text` и `source`, иначе сообщение не будет переотправлено.
-- Протокол обработки прост: текст перенаправляется напрямую, никакой дополнительной фильтрации/обогащения не происходит.
-- `internal/messaging` гарантирует идемпотентную отправку и логирует доставку для отладки.
-- Чтобы изменить поведение, расширьте `processor.TgMessagePreparer` — `Handle` просто маршалит и посылает JSON.
+   или через Docker.
+4. Проверьте, что сообщения с `chat_id` и `text` появляются в `KAFKA_TOPIC_NAME_TG_REQUEST_MESSAGE` и считываются `telegram-sender`.
